@@ -1,0 +1,16 @@
+policy:
+  id: P-002
+  name: Permit Trusted Signed Executables
+  version: 1
+
+  description: >
+    Permit execution when the executable is signed by a trusted publisher.
+
+  conditions:
+    subject:
+      signature: valid
+
+    action:
+      type: execute
+
+  effect: permit

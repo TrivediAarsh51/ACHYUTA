@@ -1,0 +1,53 @@
+# ACHYUTA Core Domain Model Diagram
+
+```mermaid
+flowchart TD
+
+    I[Identity]
+    S[Subject]
+
+    I --> R[Request]
+    S --> R
+
+    R --> A[Action]
+    R --> RES[Resource]
+    R --> C[Context]
+
+    R --> E[Evidence]
+
+    E --> P[Policy Evaluation]
+
+    P --> RA[Risk Assessment]
+
+    RA --> TS[Trust State]
+
+    TS --> D[Decision]
+
+    D --> EA[Enforcement Action]
+
+    EA --> T[Telemetry Event]
+
+    T --> E
+
+    P -. supports .-> D
+    E -. supports .-> D
+    C -. influences .-> RA
+```
+
+## Architectural Interpretation
+
+The diagram represents the primary ACHYUTA decision lifecycle:
+
+1. An Identity and Subject are associated with a Request.
+2. The Request specifies an Action against a Resource.
+3. Context describes the circumstances surrounding the Request.
+4. Evidence is collected from available security telemetry and verification mechanisms.
+5. Applicable Policies are evaluated.
+6. A Risk Assessment is produced.
+7. The Trust State is determined.
+8. A Decision is generated.
+9. The Decision results in an Enforcement Action.
+10. Enforcement generates Telemetry.
+11. Telemetry becomes additional Evidence for future evaluation.
+
+The feedback loop is intentional and represents ACHYUTA's continuous verification model.

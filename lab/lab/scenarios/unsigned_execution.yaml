@@ -1,0 +1,16 @@
+policy:
+  id: P-001
+  name: Block Unsigned Executables
+  version: 1
+
+  description: >
+    Prevent execution of unsigned executable files.
+
+  conditions:
+    subject:
+      signature: unsigned
+
+    action:
+      type: execute
+
+  effect: deny

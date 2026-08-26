@@ -1,0 +1,20 @@
+policy:
+  id: P-003
+  name: Quarantine Suspicious PowerShell Execution
+  version: 1
+
+  description: >
+    Quarantine PowerShell execution when the process originates
+    from an untrusted location.
+
+  conditions:
+    subject:
+      type: powershell
+
+    action:
+      type: execute
+
+    context:
+      origin: untrusted
+
+  effect: quarantine

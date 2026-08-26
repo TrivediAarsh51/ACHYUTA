@@ -1,0 +1,47 @@
+policies:
+
+  - id: P-010
+    name: Permit Signed Executables
+    version: 1
+
+    conditions:
+      subject:
+        signature: valid
+
+      action:
+        type: execute
+
+    effect: permit
+
+  - id: P-011
+    name: Restrict Execution From Untrusted Origin
+    version: 1
+
+    conditions:
+      subject:
+        signature: valid
+
+      action:
+        type: execute
+
+      context:
+        origin: untrusted
+
+    effect: restrict
+
+  - id: P-012
+    name: Quarantine High Risk Execution
+    version: 1
+
+    conditions:
+      subject:
+        signature: valid
+
+      action:
+        type: execute
+
+      context:
+        origin: untrusted
+        risk: high
+
+    effect: quarantine
