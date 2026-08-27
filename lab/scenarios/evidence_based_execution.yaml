@@ -1,0 +1,19 @@
+policy:
+  id: P-004
+  name: Deny Execution of Verified Unsigned Executables
+  version: 1
+
+  description: >
+    Deny execution when Pramana provides verified evidence
+    that the executable is unsigned.
+
+  conditions:
+    action:
+      type: execute
+
+  evidence:
+    signature:
+      value: unsigned
+      verified: true
+
+  effect: deny

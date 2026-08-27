@@ -3,11 +3,11 @@ Tests for ACHYUTA Niyama Policy Engine v0.1
 """
 
 from engine.policy import (
-    Request,
     evaluate_policy,
     load_policy,
 )
 
+from engine.request import SecurityRequest
 
 def test_unsigned_executable_is_denied(tmp_path):
 
@@ -34,7 +34,7 @@ policy:
 
     policy = load_policy(policy_file)
 
-    request = Request(
+    request = SecurityRequest(
         request_id="REQ-001",
 
         identity={
@@ -97,7 +97,7 @@ policy:
 
     policy = load_policy(policy_file)
 
-    request = Request(
+    request = SecurityRequest(
         request_id="REQ-002",
 
         identity={
