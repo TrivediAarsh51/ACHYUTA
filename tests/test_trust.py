@@ -155,6 +155,40 @@ def test_new_entity_starts_unknown():
     assert entity.state == TrustState.UNKNOWN
 
 
+def test_constructor_rejects_direct_trusted_initialization():
+
+    entity = TrustEntity(
+        entity_id="process:constructor-trusted",
+        entity_type=EntityType.PROCESS,
+    )
+    assert entity.state == TrustState.UNKNOWN
+
+    with pytest.raises(ValueError):
+        TrustEntity(
+            entity_id="process:constructor-trusted-attempt",
+            entity_type=EntityType.PROCESS,
+            state=TrustState.TRUSTED,
+        )
+
+
+def test_state_attribute_cannot_be_directly_mutated_to_trusted():
+
+    entity = TrustEntity(
+        entity_id="process:direct-mutation",
+        entity_type=EntityType.PROCESS,
+    )
+    original_state = entity.state
+    original_history = tuple(entity.transition_history)
+
+    assert entity.state == TrustState.UNKNOWN
+
+    with pytest.raises((AttributeError, TypeError, ValueError)):
+        entity.state = TrustState.TRUSTED
+
+    assert entity.state == original_state
+    assert tuple(entity.transition_history) == original_history
+
+
 def test_deny_process_results_in_quarantine():
 
     state = trust_state_from_decision(

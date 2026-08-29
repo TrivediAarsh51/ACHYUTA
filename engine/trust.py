@@ -102,23 +102,38 @@ class TrustEntity:
         default_factory=list
     )
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "state" and self.__dict__.get("_state_locked", False):
+            raise AttributeError(
+                "TrustEntity.state is not directly writable; use transition() or recover()."
+            )
+        object.__setattr__(self, name, value)
+
     def __post_init__(self) -> None:
         if not isinstance(self.entity_id, str) or not self.entity_id.strip():
             raise ValueError("Entity ID cannot be empty.")
 
         try:
-            self.entity_type = EntityType(self.entity_type)
+            object.__setattr__(self, "entity_type", EntityType(self.entity_type))
         except (TypeError, ValueError) as error:
             raise ValueError(
                 "Trust entities require a supported entity type."
             ) from error
 
         try:
-            self.state = TrustState(self.state)
+            object.__setattr__(self, "state", TrustState(self.state))
         except (TypeError, ValueError) as error:
             raise ValueError(
                 "Trust entities require a supported trust state."
             ) from error
+
+        if self.state is TrustState.TRUSTED:
+            raise ValueError(
+                "Direct initialization to TRUSTED is prohibited. "
+                "Use a controlled trust-promotion transition instead."
+            )
+
+        object.__setattr__(self, "_state_locked", True)
 
     def transition(
         self,
@@ -144,9 +159,9 @@ class TrustEntity:
             evidence_ids=evidence_ids,
         )
 
-        self.state = validated_state
-        self.reason = reason
-        self.state_since = transition.timestamp
+        object.__setattr__(self, "state", validated_state)
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "state_since", transition.timestamp)
 
         self.transition_history.append(transition)
 
@@ -217,9 +232,9 @@ class TrustEntity:
             recovery_mode=validated_mode,
         )
 
-        self.state = transition.to_state
-        self.reason = transition.reason
-        self.state_since = transition.timestamp
+        object.__setattr__(self, "state", transition.to_state)
+        object.__setattr__(self, "reason", transition.reason)
+        object.__setattr__(self, "state_since", transition.timestamp)
         self.transition_history.append(transition)
 
         return transition

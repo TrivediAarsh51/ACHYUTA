@@ -110,6 +110,40 @@ description: "Task list for Trust State Management"
 
 ---
 
+## Phase 7: ADR-007 Security Hardening & Controlled Trust-State Promotion
+
+**Purpose**: Implement ADR-007 security controls to prevent unauthorized promotion to `TRUSTED`, ensure transition integrity, protect history from mutation, and establish controlled state machine semantics.
+
+**Related Document**: [docs/ADR/ADR-007-Controlled Trust-State Promotion and Transition Integrity](../../docs/ADR/ADR-007-Controlled%20Trust-State%20Promotion%20and%20Transition%20Integrity)
+
+**Baseline**: Existing 48-passing-test foundation from Phase 1-6.
+
+### Tests for ADR-007 Security Hardening
+
+- [ ] T027 [P] Establish a regression-test baseline snapshot in [tests/test_trust.py](../../tests/test_trust.py) and [tests/test_integration.py](../../tests/test_integration.py) before implementing any ADR-007 hardening to verify all 48 existing tests remain passing throughout Phase 7.
+- [ ] T028 Add tests confirming that direct `TRUSTED` initialization is rejected and an entity initializes only to `UNKNOWN` state in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T029 Add tests verifying that direct mutation of an entity's current trust state through public interfaces is unavailable or rejected in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T030 Add tests confirming that transition history is immutable and protected from external modification, reordering, insertion, deletion, or replacement in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T031 Add tests proving that ordinary transitions CANNOT independently promote an entity to `TRUSTED` and that `TRUSTED` promotion is blocked as an ordinary state transition in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T032 Add tests verifying that recovery requirements CANNOT be bypassed through ordinary transitions and that recovery modes remain distinct from routine transitions in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T033 Add tests confirming that a raw decision value such as `"permit"` CANNOT independently produce `TRUSTED` promotion and that only validated decision contexts satisfy promotion requirements in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T034 Add tests validating that evidence identifiers supplied during transitions cannot promote an entity without correlated decision authority and that fabricated or unvalidated evidence references cannot independently justify `TRUSTED` in [tests/test_trust.py](../../tests/test_trust.py).
+- [ ] T035 Add tests ensuring that every accepted transition records and preserves the authoritative source state, and that rejected operations never modify current state or transition history in [tests/test_trust.py](../../tests/test_trust.py).
+
+### Implementation for ADR-007 Security Hardening
+
+- [ ] T036 Implement the minimum Trust State changes in [engine/trust.py](../../engine/trust.py) required to enforce ADR-007 controls: protected `TRUSTED` promotion, no-direct-initialization, no-direct-state-mutation, history immutability, source-state validation, and separation of recovery from ordinary transitions.
+- [ ] T037 [P] Review [engine/trust.py](../../engine/trust.py) against ADR-007 Section 2.1 responsibility boundaries to confirm that Pramana (evidence), Niyama (policy), Viveka (decision), and Raksha (enforcement) responsibilities remain outside the trust state component and that boundaries are preserved.
+
+### Validation for ADR-007 Security Hardening
+
+- [ ] T038 Run the complete regression suite from [quickstart.md](quickstart.md), confirming all 48+ existing tests plus all new ADR-007 hardening tests pass and no regression has occurred.
+- [ ] T039 [P] Perform a final constitutional and ADR-007 security review of [engine/trust.py](../../engine/trust.py), the new test coverage in [tests/test_trust.py](../../tests/test_trust.py), and [tests/test_integration.py](../../tests/test_integration.py), confirming that ADR-007 decision points are met and that no unauthorized trust-state mutations, bypasses, or audit gaps remain.
+
+**Checkpoint**: ADR-007 is fully implemented when all security hardening tests pass, `TRUSTED` promotion is controlled, transition history is immutable, recovery cannot be bypassed, and responsibility boundaries are preserved.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -118,6 +152,7 @@ description: "Task list for Trust State Management"
 - **Foundational (Phase 2)**: T003-T004 depend on T001-T002 and block all user-story work.
 - **User Stories (Phase 3+)**: US1, US2, and US3 depend on Phase 2. US2 and US3 use the US1 trust domain, so the recommended delivery order is US1 -> US2 -> US3, although their tests can be prepared in parallel after the foundation.
 - **Polish (Phase 6)**: Depends on all desired user stories being complete.
+- **Security Hardening (Phase 7)**: Depends on Phase 1-6 being complete; implements ADR-007 controls on top of the stable Phase 1-6 foundation.
 
 ### User Story Dependencies
 
@@ -133,6 +168,7 @@ description: "Task list for Trust State Management"
 - T011 and T012 can be prepared in parallel with separate test-file ownership, then T013-T014 execute sequentially in [engine/trust.py](../../engine/trust.py).
 - T017-T019 can be prepared in parallel with separate test-file ownership, then T020-T022 execute sequentially in [engine/trust.py](../../engine/trust.py).
 - T024 can run in parallel with the final review before T025.
+- T028-T035 (Phase 7 security hardening tests) can be prepared in parallel with explicit test-file ownership of non-overlapping regions in [tests/test_trust.py](../../tests/test_trust.py), but should execute sequentially to avoid merge conflicts. T036-T037 then implement sequentially in [engine/trust.py](../../engine/trust.py).
 
 ## Parallel Example: User Story 1
 
@@ -178,9 +214,21 @@ These tests share [tests/test_trust.py](../../tests/test_trust.py), so use expli
 2. Add User Story 2 for auditable, evidence-linked transition history.
 3. Add User Story 3 for quarantine, conservative denial handling, and entity-specific recovery modes.
 4. Run the full regression and constitutional boundary review.
+5. Implement ADR-007 security hardening (Phase 7) to enforce controlled trust-state promotion, prevent unauthorized mutations, and protect audit integrity.
+
+### ADR-007 Security Hardening Execution
+
+Phase 7 tasks execute only after Phase 1-6 baseline stability is confirmed. The strategy is:
+
+1. **T027**: Snapshot the 48 passing tests as a regression baseline.
+2. **T028-T035**: Write all ADR-007 security tests in [tests/test_trust.py](../../tests/test_trust.py) (these will initially fail).
+3. **T036**: Implement minimum Trust State changes to satisfy all ADR-007 tests.
+4. **T037**: Boundary review confirming Pramana, Niyama, Viveka, Raksha remain outside Trust State.
+5. **T038-T039**: Full regression validation and security sign-off.
 
 ### Notes
 
 - Every task uses the required checkbox, sequential ID, optional parallel marker, story label where applicable, and an exact repository file path.
 - No contract tasks are included because the plan identifies no external API, CLI, or UI contract.
 - No Windows enforcement task is included; Raksha remains outside this feature.
+- Phase 7 assumes Phase 1-6 are stable; no modifications to existing Phase 1-6 tasks are required or permitted.
