@@ -1,0 +1,367 @@
+# ADR-007: Controlled Trust-State Promotion and Transition Integrity
+
+**Status:** Accepted
+**Date:** 2026-08-29
+**Decision Owners:** ACHYUTA Architecture Team
+**Related ADRs:** ADR-001, ADR-002, ADR-003, ADR-004, ADR-005, ADR-006
+
+---
+
+## 1. Context
+
+ACHYUTA uses Trust States to represent the current trust condition of a canonical entity.
+
+ADR-001 established that binary authorization is insufficient and that ACHYUTA requires explicit Trust States.
+
+ADR-002 established that trust recovery is entity-specific and may require different recovery mechanisms.
+
+ADR-003 established that trust evaluation is Request-Centric.
+
+ADR-004 established Evidence as a first-class security object.
+
+ADR-005 established the canonical domain model and separated responsibilities between Identity, Subject, Request, Action, Resource, Evidence, Decision, and Trust State.
+
+The initial Trust State implementation successfully established the core state model, transition records, validation, and recovery behavior. Subsequent security review identified several security gaps:
+
+* `TRUSTED` can be assigned directly during entity construction.
+* Current state can be directly modified after construction.
+* Ordinary transitions can potentially promote an entity without an appropriate authorization boundary.
+* Recovery requirements can potentially be bypassed through ordinary transitions.
+* Transition history can be modified through its publicly exposed collection.
+* Evidence identifiers may be supplied without sufficient provenance validation.
+* A raw decision value such as `"permit"` may be interpreted as sufficient to promote an entity to `TRUSTED`.
+
+These weaknesses create a risk that a trust assertion could be created or modified without the evidence, decision authority, recovery process, or audit information required to justify that assertion.
+
+Therefore, ACHYUTA requires a controlled trust-state promotion boundary.
+
+---
+
+## 2. Decision
+
+ACHYUTA MUST treat Trust State Management as a controlled state machine rather than a freely mutable data structure.
+
+### 2.1 Protected TRUSTED Promotion
+
+`TRUSTED` MUST be treated as a protected promotion state.
+
+An entity MUST NOT enter `TRUSTED` through an unrestricted ordinary transition.
+
+Promotion to `TRUSTED` MUST occur only through a controlled security operation that receives an authorized decision context and the applicable supporting evidence required by the relevant policy or recovery process.
+
+The Trust State component MUST NOT independently invent policy requirements or perform policy evaluation.
+
+The responsibility boundaries remain:
+
+* **Pramana** — evidence representation, provenance, and validation.
+* **Niyama** — policy representation and policy evaluation.
+* **Viveka** — decision resolution and validated decision context.
+* **Trust State Management** — entity trust state and transition integrity.
+* **Raksha** — future enforcement.
+
+### 2.2 No Direct Trusted Initialization
+
+New Trust Entities MUST NOT be initialized directly into `TRUSTED` through the normal constructor or unrestricted creation interface.
+
+The normal creation path MUST initialize an entity to `UNKNOWN`.
+
+Any subsequent promotion to `TRUSTED` MUST pass through the controlled promotion boundary.
+
+### 2.3 No Direct State Mutation
+
+The current Trust State MUST NOT be freely writable by callers.
+
+State changes MUST occur through controlled Trust State operations that validate the requested operation against the authoritative current state and applicable security requirements.
+
+### 2.4 Trust State Is Not Authorization
+
+A request-level authorization decision and an entity-level Trust State MUST remain separate concepts.
+
+In particular:
+
+```text
+PERMIT ≠ TRUSTED
+DENY ≠ UNTRUSTED
+```
+
+A `PERMIT` decision applies to a particular security request.
+
+A `TRUSTED` state represents an entity-level trust assertion.
+
+A request being permitted MUST NOT automatically make the requesting entity `TRUSTED`.
+
+Similarly, a denied request MUST NOT automatically make an entity permanently `UNTRUSTED`.
+
+### 2.5 Raw Decision Values Are Insufficient
+
+Trust State Management MUST NOT treat an uncontrolled raw value such as:
+
+```text
+"permit"
+```
+
+as sufficient authorization to promote an entity to `TRUSTED`.
+
+Trust promotion MUST consume an appropriate validated decision context from the decision boundary.
+
+### 2.6 Recovery Cannot Be Bypassed
+
+Recovery MUST remain distinct from ordinary transitions.
+
+An entity requiring recovery MUST use the applicable entity-specific recovery mechanism defined by ACHYUTA's recovery architecture.
+
+The recovery modes established by ADR-002 remain:
+
+* `AUTOMATIC`
+* `STRONG_REVERIFICATION`
+* `HUMAN_APPROVAL`
+
+An ordinary transition MUST NOT provide a bypass around recovery requirements.
+
+The recovery mode used by an accepted recovery MUST be recorded as part of the transition audit information.
+
+### 2.7 Transition Integrity
+
+Every accepted state transition MUST:
+
+1. Validate the current authoritative state.
+2. Validate that the requested operation is permitted.
+3. Preserve the source state.
+4. Record the resulting state.
+5. Record the reason.
+6. Record the timestamp.
+7. Record applicable evidence references.
+8. Preserve transition history integrity.
+
+Rejected operations MUST NOT modify the current state or transition history.
+
+### 2.8 History Integrity
+
+Transition history MUST be append-only from the perspective of the Trust State domain.
+
+Transition records MUST remain immutable after creation.
+
+External callers MAY inspect transition history but MUST NOT be able to:
+
+* append arbitrary entries;
+* remove entries;
+* reorder entries;
+* replace entries; or
+* modify existing entries.
+
+---
+
+## 3. Architectural Consequences
+
+### Positive Consequences
+
+* Direct promotion to `TRUSTED` becomes significantly harder to abuse.
+* Trust State becomes a controlled security boundary.
+* Recovery requirements cannot be silently bypassed through ordinary transitions.
+* Trust State remains separated from policy evaluation and decision resolution.
+* Authorization decisions remain distinct from entity trust.
+* Transition history becomes more reliable as an audit source.
+* Evidence and decision provenance remain traceable across the architecture.
+* The architecture becomes easier to test using negative and adversarial cases.
+
+### Negative Consequences
+
+* Existing callers that directly construct or mutate Trust State objects may require migration.
+* The Trust State API becomes more restrictive.
+* Additional decision and evidence interfaces will be required before the complete controlled promotion path can be implemented.
+* Some existing tests that intentionally exercise unrestricted transitions may need to be converted into security regression tests.
+* Implementation complexity increases because security boundaries must be explicitly represented.
+
+---
+
+## 4. Alternatives Considered
+
+### Alternative 1: Keep Direct State Mutation
+
+Allow callers to directly assign Trust State values.
+
+**Rejected.**
+
+This permits callers to bypass transition validation, recovery requirements, evidence requirements, and audit history.
+
+---
+
+### Alternative 2: Allow Any Valid State Transition
+
+Allow any transition between supported Trust States while validating only that the target state is a valid enum value.
+
+**Rejected.**
+
+Enum validity does not establish that a transition is authorized or appropriate for the current security context.
+
+---
+
+### Alternative 3: Allow `PERMIT` to Automatically Produce `TRUSTED`
+
+Treat a successful authorization decision as sufficient evidence that the entity itself should become trusted.
+
+**Rejected.**
+
+A request-level authorization result is not equivalent to an entity-level trust assertion.
+
+---
+
+### Alternative 4: Make Trust State Responsible for Policy Evaluation
+
+Allow Trust State Management to determine whether evidence and policy requirements are satisfied.
+
+**Rejected.**
+
+This violates the separation of responsibilities established by the ACHYUTA architecture. Niyama owns policy evaluation and Viveka owns decision resolution.
+
+---
+
+### Alternative 5: Require Every State Change to Be Human Approved
+
+Require human approval for every transition into a safer state.
+
+**Rejected.**
+
+This would unnecessarily reduce automation and conflict with the entity-specific recovery model established by ADR-002.
+
+Human approval remains appropriate where policy or recovery requirements identify a high-impact or ambiguous condition.
+
+---
+
+## 5. Security Invariants
+
+The following invariants are established by this ADR:
+
+1. New entities default to `UNKNOWN`.
+2. Direct initialization into `TRUSTED` is not permitted through the normal creation path.
+3. Current Trust State cannot be freely modified by callers.
+4. `TRUSTED` promotion requires a controlled operation.
+5. A raw `"permit"` value cannot independently establish `TRUSTED`.
+6. Request authorization and entity trust remain separate concepts.
+7. Recovery requirements cannot be bypassed through ordinary transitions.
+8. Accepted transitions are auditable.
+9. Transition records are immutable.
+10. Transition history is externally read-only.
+11. Rejected operations do not modify state or history.
+12. Trust State does not assume responsibility for evidence validation, policy evaluation, or decision resolution.
+13. Evidence used to support promotion must originate from the applicable evidence boundary.
+14. The source state of an accepted transition must correspond to the authoritative current state.
+
+---
+
+## 6. Implementation Impact
+
+The implementation will require controlled interfaces for:
+
+* Trust Entity creation.
+* Trust State mutation.
+* Ordinary transitions.
+* Trusted promotion.
+* Recovery.
+* Transition-history access.
+* Validated decision consumption.
+* Applicable evidence references.
+
+The exact API design MUST be determined during implementation planning and MUST NOT introduce hidden responsibility into Trust State Management.
+
+Existing tests MUST be preserved where their behavior remains architecturally valid.
+
+Tests that conflict with this ADR MUST be changed only as an intentional contract migration and MUST be replaced with tests covering the new security boundary.
+
+---
+
+## 7. Testing Requirements
+
+Before this ADR is considered fully implemented, automated tests MUST verify:
+
+* New entities initialize as `UNKNOWN`.
+* Direct `TRUSTED` initialization is rejected.
+* Direct state assignment is rejected or unavailable.
+* Ordinary transitions cannot bypass protected promotion requirements.
+* Recovery cannot be bypassed through ordinary transitions.
+* Invalid state transitions are rejected.
+* Accepted transitions update state and history consistently.
+* Rejected transitions leave state and history unchanged.
+* Transition history cannot be externally mutated.
+* Transition records remain immutable.
+* Raw `"permit"` cannot promote an entity to `TRUSTED`.
+* A validated decision context is required for controlled promotion.
+* Applicable evidence is required according to the relevant security policy.
+* `DENY` does not automatically produce permanent `UNTRUSTED`.
+* Recovery records one of the three approved recovery modes.
+* The security explanation remains traceable:
+
+```text
+Request
+   ↓
+Evidence
+   ↓
+Policy
+   ↓
+Decision
+   ↓
+Trust State
+```
+
+---
+
+## 8. Relationship to NIST Zero Trust Architecture
+
+This decision is intended to remain aligned with the architectural principles of NIST SP 800-207.
+
+NIST defines Zero Trust Architecture around resource access decisions and separates decision-making and enforcement responsibilities through components including the Policy Engine, Policy Administrator, and Policy Enforcement Point.
+
+ACHYUTA does not claim that NIST SP 800-207 defines the specific Trust State machine described here.
+
+Instead, ACHYUTA uses the NIST Zero Trust decision architecture as an external architectural foundation and introduces an explicit evidence-centric and stateful Trust State model as an ACHYUTA-specific architectural design.
+
+This distinction MUST be preserved in project documentation.
+
+---
+
+## 9. Scope Boundary
+
+This ADR does NOT define:
+
+* the complete Trust State transition graph;
+* endpoint enforcement implementation;
+* Windows kernel or process enforcement;
+* network enforcement;
+* the complete Pramana provenance implementation;
+* the complete Viveka decision schema;
+* production audit storage;
+* a universal evidence threshold;
+* entity-specific policy definitions.
+
+Those concerns require separate architectural decisions or implementation specifications where necessary.
+
+---
+
+## 10. Result
+
+ACHYUTA will no longer treat Trust State as an unrestricted mutable value.
+
+Trust State changes will occur through controlled operations, with `TRUSTED` treated as a protected promotion boundary.
+
+The architecture will preserve the separation:
+
+```text
+Evidence      → Pramana
+Policy        → Niyama
+Decision      → Viveka
+Trust State   → Trust State Management
+Enforcement   → Raksha
+```
+
+and:
+
+```text
+Authorization Decision ≠ Trust State
+```
+
+This decision establishes the architectural foundation for hardening the ACHYUTA Trust Core before endpoint enforcement and broader Zero Trust implementation are introduced.
+
+---
+
+**Status:** Accepted
+**Version:** 1.0
