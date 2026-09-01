@@ -3,7 +3,7 @@ ACHYUTA - End-to-End Evidence + Policy Test
 """
 
 from engine.evidence import create_evidence
-from engine.request import SecurityRequest
+from engine.request import SecurityRequest, create_fresh_request, requires_re_evaluation
 from engine.policy import evaluate_policy
 from engine.trust import EntityType, TrustEntity, TrustState
 
@@ -86,3 +86,103 @@ def test_request_evidence_identifier_can_be_recorded_by_trust_layer():
     assert request.evidence[0] is evidence
     assert transition.evidence_ids == ("E-TRUST-001",)
     assert entity.state == TrustState.TRUSTED
+
+
+def test_re_evaluation_for_fresh_request_uses_distinct_request_context():
+
+    original = SecurityRequest(
+        request_id="REQ-ORIGINAL-INT",
+        identity={"type": "local_user", "name": "operator"},
+        subject={"type": "executable", "name": "safe.exe"},
+        action={"type": "execute"},
+        resource={"type": "executable", "path": r"C:\safe.exe"},
+    )
+    original.add_evidence(
+        create_evidence(
+            evidence_id="E-INT-001",
+            category="signature",
+            source="mock",
+            value="signed",
+            strength="high",
+            verified=True,
+        )
+    )
+
+    refreshed = create_fresh_request(
+        original,
+        request_id="REQ-RECHECK-INT",
+        context={"origin": "re-evaluation"},
+    )
+
+    assert refreshed.request_id != original.request_id
+    assert refreshed.history_id == original.request_id
+    assert refreshed.context["origin"] == "re-evaluation"
+
+
+def test_re_evaluation_request_keeps_explicit_previous_request_lineage():
+
+    original = SecurityRequest(
+        request_id="REQ-ORIGINAL-ISO",
+        identity={"type": "local_user", "name": "operator"},
+        subject={"type": "executable", "name": "safe.exe"},
+        action={"type": "execute"},
+        resource={"type": "executable", "path": r"C:\safe.exe"},
+        context={"origin": "initial-evaluation"},
+    )
+    original.add_evidence(
+        create_evidence(
+            evidence_id="E-ISO-001",
+            category="signature",
+            source="mock",
+            value="signed",
+            strength="high",
+            verified=True,
+        )
+    )
+
+    refreshed = create_fresh_request(
+        original,
+        request_id="REQ-RECHECK-ISO",
+        context={"origin": "continuous-re-evaluation"},
+    )
+
+    assert refreshed is not original
+    assert refreshed.request_id != original.request_id
+    assert refreshed.history_id == original.request_id
+    assert refreshed.context is not original.context
+    assert refreshed.context["previous_request_id"] == original.request_id
+    assert refreshed.context["request_history"] == [original.request_id]
+    assert original.context.get("previous_request_id") is None
+    assert original.context.get("request_history") is None
+
+
+def test_irrelevant_signal_does_not_trigger_trust_transition():
+
+    original = SecurityRequest(
+        request_id="REQ-ORIGINAL-IRRELEVANT",
+        identity={"type": "local_user", "name": "operator"},
+        subject={"type": "executable", "name": "safe.exe"},
+        action={"type": "execute"},
+        resource={"type": "executable", "path": r"C:\safe.exe"},
+        context={"origin": "initial-evaluation"},
+    )
+    original.add_evidence(
+        create_evidence(
+            evidence_id="E-IRR-001",
+            category="signature",
+            source="mock",
+            value="signed",
+            strength="high",
+            verified=True,
+        )
+    )
+
+    refreshed = create_fresh_request(
+        original,
+        request_id="REQ-IRRELEVANT-RECHECK",
+        context={"origin": "user-activity-log", "event_type": "mouse-move"},
+    )
+
+    assert refreshed.history_id == original.request_id
+    assert requires_re_evaluation(refreshed, original) is False
+    assert refreshed.context["event_type"] == "mouse-move"

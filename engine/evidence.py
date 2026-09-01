@@ -28,6 +28,30 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def normalize_evidence_item(evidence: Evidence | dict[str, Any]) -> Evidence:
+    """Normalize evidence represented as object or mapping into the canonical Evidence model."""
+    if isinstance(evidence, Evidence):
+        return evidence
+
+    if isinstance(evidence, dict):
+        metadata = evidence.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {"raw": metadata}
+
+        return Evidence(
+            evidence_id=str(evidence.get("evidence_id") or evidence.get("id") or "unknown"),
+            category=str(evidence.get("category") or "unknown"),
+            source=str(evidence.get("source") or "unknown"),
+            value=evidence.get("value"),
+            strength=str(evidence.get("strength") or "medium"),
+            timestamp=evidence.get("timestamp") or datetime.now(timezone.utc),
+            verified=bool(evidence.get("verified", False)),
+            metadata=metadata,
+        )
+
+    raise TypeError("Evidence must be an Evidence instance or mapping.")
+
+
 # ---------------------------------------------------------------------------
 # Evidence Model
 # ---------------------------------------------------------------------------
@@ -61,6 +85,19 @@ class Evidence:
     metadata: dict[str, Any] = field(
         default_factory=dict
     )
+
+    def __getitem__(self, key: str) -> Any:
+        if hasattr(self, key):
+            return getattr(self, key)
+        if key in self.metadata:
+            return self.metadata[key]
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 # ---------------------------------------------------------------------------

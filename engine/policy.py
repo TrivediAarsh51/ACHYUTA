@@ -29,6 +29,7 @@ from typing import Any
 
 import yaml
 
+from engine.evidence import normalize_evidence_item
 from engine.request import SecurityRequest
 
 
@@ -172,9 +173,9 @@ def _check_evidence_conditions(
             ]
 
         matching_evidence = [
-            evidence
+            normalize_evidence_item(evidence)
             for evidence in request.evidence
-            if evidence.category == category
+            if normalize_evidence_item(evidence).category == category
         ]
 
         if not matching_evidence:
@@ -308,6 +309,48 @@ def evaluate_policy(
         effect=effect,
         reason=condition_reasons + evidence_reasons,
     )
+
+
+def current_policy_summary(
+    policy_results: list[PolicyResult] | tuple[PolicyResult, ...],
+) -> str:
+    """Create a minimal policy summary string for a re-evaluation audit record."""
+
+    if not policy_results:
+        return "no policy results"
+
+    details: list[str] = []
+    for result in policy_results:
+        if result.matched:
+            details.append(f"{result.policy_id}:{result.effect}")
+        else:
+            details.append(f"{result.policy_id}:no-match")
+
+    return "; ".join(details)
+
+
+def evaluate_current_policy(
+    policy: dict[str, Any],
+    request: SecurityRequest,
+    *,
+    fallback_to_conservative: bool = True,
+) -> PolicyResult:
+    """Compatibility seam for current evidence + request evaluation in re-evaluation flows."""
+
+    try:
+        return evaluate_policy(policy, request)
+    except (TypeError, ValueError, KeyError):
+        if not fallback_to_conservative:
+            raise
+        return PolicyResult(
+            policy_id=policy.get("id", "unknown"),
+            policy_name=policy.get("name", "Unnamed Policy"),
+            matched=False,
+            effect="restrict",
+            reason=[
+                "Current policy evaluation was inconclusive; conservative fallback applied."
+            ],
+        )
 
 # ---------------------------------------------------------------------------
 # Multiple Policy Evaluation

@@ -7,7 +7,7 @@ from engine.policy import (
     load_policy,
 )
 
-from engine.request import SecurityRequest
+from engine.request import SecurityRequest, requires_re_evaluation
 
 def test_unsigned_executable_is_denied(tmp_path):
 
@@ -131,3 +131,47 @@ policy:
     )
 
     assert result.matched is False
+
+
+def test_contradictory_evidence_during_re_evaluation_requires_conservative_response():
+
+    original = SecurityRequest(
+        request_id="REQ-ORIGINAL-CONSERVATIVE",
+        identity={"type": "local_user", "name": "operator"},
+        subject={"type": "executable", "name": "trusted.exe"},
+        action={"type": "execute"},
+        resource={"type": "executable", "path": r"C:\trusted.exe"},
+        context={"origin": "initial-evaluation"},
+    )
+    original.add_evidence(
+        {
+            "evidence_id": "E-TRUST-001",
+            "category": "signature",
+            "source": "mock",
+            "value": "signed",
+            "strength": "high",
+            "verified": True,
+        }
+    )
+
+    contradictory = SecurityRequest(
+        request_id="REQ-RECHECK-CONSERVATIVE",
+        identity=original.identity,
+        subject=original.subject,
+        action=original.action,
+        resource=original.resource,
+        context={"origin": "fresh-evidence-recheck"},
+    )
+    contradictory.add_evidence(
+        {
+            "evidence_id": "E-TRUST-001",
+            "category": "signature",
+            "source": "mock",
+            "value": "unsigned",
+            "strength": "high",
+            "verified": True,
+        }
+    )
+
+    assert requires_re_evaluation(contradictory, original) is True
+    assert contradictory.evidence[0]["value"] == "unsigned"

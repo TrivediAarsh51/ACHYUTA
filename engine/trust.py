@@ -135,6 +135,10 @@ class TrustEntity:
 
         object.__setattr__(self, "_state_locked", True)
 
+    re_evaluation_history: list["ReEvaluationRecord"] = field(
+        default_factory=list
+    )
+
     def transition(
         self,
         new_state: TrustState,
@@ -166,6 +170,102 @@ class TrustEntity:
         self.transition_history.append(transition)
 
         return transition
+
+    def record_re_evaluation(
+        self,
+        *,
+        trigger: "ReEvaluationTrigger",
+        request_id: str,
+        evidence_ids: tuple[str, ...] = (),
+        policy_summary: str,
+        decision_id: str,
+        resulting_state: TrustState,
+        transition_reason: str,
+        previous_state: TrustState | None = None,
+        previous_request_id: str | None = None,
+        transition: TrustTransition | None = None,
+    ) -> "ReEvaluationRecord":
+        """Record the audit metadata for a distinct re-evaluation event."""
+
+        if previous_state is None:
+            if transition is not None:
+                effective_previous_state = transition.from_state
+            else:
+                effective_previous_state = self.state
+        else:
+            effective_previous_state = previous_state
+
+        if transition is None:
+            next_state = TrustState(resulting_state)
+            transition = self.transition(
+                next_state,
+                transition_reason,
+                evidence_ids=evidence_ids,
+            )
+
+        record = ReEvaluationRecord(
+            record_id=f"RECORD-{len(self.re_evaluation_history) + 1}",
+            entity_id=self.entity_id,
+            previous_state=effective_previous_state,
+            trigger_id=trigger.trigger_id,
+            request_id=request_id,
+            previous_request_id=previous_request_id,
+            evidence_ids=tuple(evidence_ids),
+            policy_summary=policy_summary,
+            decision_id=decision_id,
+            resulting_state=TrustState(resulting_state),
+            transition_reason=transition_reason,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        self.re_evaluation_history.append(record)
+        return record
+
+    def evaluate_re_evaluation(
+        self,
+        *,
+        trigger: "ReEvaluationTrigger",
+        request_id: str,
+        evidence_ids: tuple[str, ...] = (),
+        policy_summary: str,
+        decision_id: str,
+        current_state: TrustState | None = None,
+        next_state: TrustState | None = None,
+        transition_reason: str,
+        previous_request_id: str | None = None,
+    ) -> TrustTransition:
+        """Apply a controlled re-evaluation to the entity's trust state."""
+
+        previous_state = self.state if current_state is None else current_state
+        target_state = self.state if next_state is None else next_state
+
+        transition = self.transition(
+            target_state,
+            transition_reason,
+            evidence_ids=evidence_ids,
+        )
+
+        self.record_re_evaluation(
+            trigger=trigger,
+            request_id=request_id,
+            evidence_ids=evidence_ids,
+            policy_summary=policy_summary,
+            decision_id=decision_id,
+            resulting_state=target_state,
+            transition_reason=transition_reason,
+            previous_state=previous_state,
+            previous_request_id=previous_request_id,
+            transition=transition,
+        )
+
+        return transition
+
+    @property
+    def previous_state(self) -> TrustState | None:
+        """Return the most recent predecessor state for explainability."""
+        if not self.transition_history:
+            return None
+        return self.transition_history[-1].from_state
 
     def recover(
         self,
@@ -241,6 +341,57 @@ class TrustEntity:
 
 
 @dataclass(frozen=True)
+class ReEvaluationTrigger:
+    """Security-relevant trigger that justifies a trust re-evaluation."""
+
+    trigger_id: str
+    entity_id: str
+    trigger_type: str
+    source: str
+    timestamp: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    relevance_reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.trigger_id:
+            raise ValueError("Re-evaluation trigger requires an ID.")
+        if not self.entity_id:
+            raise ValueError("Re-evaluation trigger requires an entity ID.")
+        if not self.trigger_type:
+            raise ValueError("Re-evaluation trigger requires a trigger type.")
+        if not self.source:
+            raise ValueError("Re-evaluation trigger requires a source.")
+        if not self.relevance_reason.strip():
+            raise ValueError("Re-evaluation trigger requires a relevance reason.")
+
+
+@dataclass(frozen=True)
+class ReEvaluationRecord:
+    """Explainable record of a distinct trust re-evaluation event."""
+
+    record_id: str
+    entity_id: str
+    previous_state: TrustState
+    trigger_id: str
+    request_id: str
+    previous_request_id: str | None = None
+    evidence_ids: tuple[str, ...] = ()
+    policy_summary: str = ""
+    decision_id: str = ""
+    resulting_state: TrustState = TrustState.UNKNOWN
+    transition_reason: str = ""
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "previous_state", TrustState(self.previous_state))
+        object.__setattr__(self, "resulting_state", TrustState(self.resulting_state))
+        object.__setattr__(self, "evidence_ids", tuple(self.evidence_ids))
+
+
+@dataclass(frozen=True)
 class TrustExplanation:
     """
     Trace of existing request-evaluation objects and the resulting trust state.
@@ -252,6 +403,16 @@ class TrustExplanation:
     decision: Any
     trust_state: TrustState
     transition: TrustTransition | None = None
+    previous_state: TrustState | None = None
+    trigger: Any | None = None
+    previous_request_id: str | None = None
+    current_request_id: str | None = None
+    trigger_id: str | None = None
+    evidence_ids: tuple[str, ...] = ()
+    policy_summary: str = ""
+    decision_id: str = ""
+    transition_reason: str = ""
+    transition_timestamp: datetime | None = None
 
 
 def build_trust_explanation(
@@ -260,6 +421,14 @@ def build_trust_explanation(
     decision: Any,
     trust_state: TrustState,
     transition: TrustTransition | None = None,
+    *,
+    previous_state: TrustState | None = None,
+    trigger: Any | None = None,
+    previous_request_id: str | None = None,
+    decision_id: str | None = None,
+    policy_summary: str | None = None,
+    evidence_ids: tuple[str, ...] | None = None,
+    transition_reason: str | None = None,
 ) -> TrustExplanation:
     """
     Assemble the request-to-trust trace without evaluating its components.
@@ -270,13 +439,54 @@ def build_trust_explanation(
     except TypeError:
         normalized_policy_results = (policy_results,)
 
+    evidence_items = tuple(getattr(request, "evidence", ()))
+    if evidence_ids is None:
+        evidence_ids = tuple(
+            getattr(item, "evidence_id", item.get("evidence_id", "unknown"))
+            if hasattr(item, "evidence_id")
+            else item.get("evidence_id", "unknown")
+            for item in evidence_items
+        )
+
+    trigger_id = None
+    if trigger is not None:
+        trigger_id = getattr(trigger, "trigger_id", None)
+        if trigger_id is None and isinstance(trigger, dict):
+            trigger_id = trigger.get("trigger_id")
+    else:
+        trigger_id = getattr(request, "context", {}).get("trigger_id")
+
+    effective_previous_state = previous_state
+    if effective_previous_state is None and transition is not None:
+        effective_previous_state = transition.from_state
+    if effective_previous_state is None:
+        effective_previous_state = getattr(request, "context", {}).get("previous_state")
+
+    effective_previous_request_id = previous_request_id or getattr(request, "context", {}).get("previous_request_id")
+    current_request_id = getattr(request, "request_id", None)
+    decision_identifier = decision_id or getattr(decision, "decision_id", "")
+    summary = policy_summary or "; ".join(
+        f"{result.policy_id}:{result.effect or 'no-match'}" for result in normalized_policy_results if hasattr(result, "policy_id")
+    )
+    result_reason = transition_reason or (transition.reason if transition is not None else "")
+
     return TrustExplanation(
         request=request,
-        evidence=tuple(getattr(request, "evidence", ())),
+        evidence=evidence_items,
         policy_results=normalized_policy_results,
         decision=decision,
         trust_state=TrustState(trust_state),
         transition=transition,
+        previous_state=TrustState(effective_previous_state) if effective_previous_state is not None else None,
+        trigger=trigger,
+        previous_request_id=effective_previous_request_id,
+        current_request_id=current_request_id,
+        trigger_id=trigger_id,
+        evidence_ids=tuple(evidence_ids),
+        policy_summary=summary,
+        decision_id=decision_identifier,
+        transition_reason=result_reason,
+        transition_timestamp=transition.timestamp if transition is not None else None,
     )
 
 
@@ -322,8 +532,55 @@ def trust_state_from_decision(
         }:
             return TrustState.QUARANTINED
 
-        return TrustState.UNVERIFIED
-
     raise ValueError(
         f"Unknown decision effect: {decision_effect}"
+    )
+
+
+def apply_re_evaluation_transition(
+    entity: TrustEntity,
+    *,
+    decision,
+    trigger: ReEvaluationTrigger,
+    request_id: str,
+    evidence_ids: tuple[str, ...] = (),
+    policy_summary: str,
+    decision_id: str,
+    transition_reason: str,
+) -> TrustTransition:
+    """Apply a re-evaluation decision to an entity's trust state.
+    
+    Converts the decision effect to a target trust state, then uses
+    the controlled transition mechanism to update the entity.
+    
+    Args:
+        entity: The TrustEntity to update
+        decision: The Decision object from Viveka
+        trigger: The ReEvaluationTrigger that prompted this
+        request_id: The fresh request ID for this re-evaluation
+        evidence_ids: IDs of evidence used in the decision
+        policy_summary: Summary of matched policies
+        decision_id: The decision identifier
+        transition_reason: Reason for the trust-state transition
+    
+    Returns:
+        The TrustTransition record
+    """
+    
+    # Determine target state from decision
+    target_state = trust_state_from_decision(
+        decision.effect.value if hasattr(decision.effect, 'value') else str(decision.effect),
+        entity.entity_type,
+    )
+    
+    # Apply controlled transition with audit recording
+    return entity.evaluate_re_evaluation(
+        trigger=trigger,
+        request_id=request_id,
+        evidence_ids=evidence_ids,
+        policy_summary=policy_summary,
+        decision_id=decision_id,
+        current_state=entity.state,  # Preserve current state before transition
+        next_state=target_state,
+        transition_reason=transition_reason,
     )

@@ -4,9 +4,13 @@ ACHYUTA - Trust State Engine Tests
 
 import pytest
 
+from engine.evidence import create_evidence
+from engine.request import SecurityRequest, create_fresh_request
 from engine.trust import (
     EntityType,
     RecoveryMode,
+    ReEvaluationRecord,
+    ReEvaluationTrigger,
     TrustEntity,
     TrustState,
     TrustTransition,
@@ -257,13 +261,195 @@ def test_trusted_transition_is_recorded():
     )
 
     assert entity.state == TrustState.TRUSTED
-
-    assert len(entity.transition_history) == 1
-
     assert transition.from_state == TrustState.UNKNOWN
     assert transition.to_state == TrustState.TRUSTED
-
     assert transition.evidence_ids == ("E-001",)
+
+
+def test_re_evaluation_history_records_trigger_and_audit_metadata():
+
+    entity = TrustEntity(
+        entity_id="process:re-eval",
+        entity_type=EntityType.PROCESS,
+    )
+    entity.transition(
+        TrustState.TRUSTED,
+        "Initial trust established.",
+        evidence_ids=("E-000",),
+    )
+
+    trigger = ReEvaluationTrigger(
+        trigger_id="TRIGGER-001",
+        entity_id="process:re-eval",
+        trigger_type="evidence_update",
+        source="mock",
+        relevance_reason="New unsigned evidence is present.",
+    )
+
+    record = entity.record_re_evaluation(
+        trigger=trigger,
+        request_id="REQ-RE-001",
+        evidence_ids=("E-001",),
+        policy_summary="signature policy -> deny",
+        decision_id="DEC-RE-001",
+        resulting_state=TrustState.QUARANTINED,
+        transition_reason="Fresh evidence contradicts previous trust.",
+    )
+
+    assert isinstance(record, ReEvaluationRecord)
+    assert record.previous_state == TrustState.TRUSTED
+    assert record.trigger_id == "TRIGGER-001"
+    assert record.request_id == "REQ-RE-001"
+    assert entity.re_evaluation_history[-1] is record
+
+
+def test_re_evaluation_record_creates_append_only_transition_entry():
+
+    entity = TrustEntity(
+        entity_id="process:append-only-audit",
+        entity_type=EntityType.PROCESS,
+    )
+    initial = entity.transition(
+        TrustState.TRUSTED,
+        "Initial trust established.",
+        evidence_ids=("E-APP-000",),
+    )
+
+    trigger = ReEvaluationTrigger(
+        trigger_id="TRIGGER-APP-001",
+        entity_id="process:append-only-audit",
+        trigger_type="evidence_update",
+        source="mock",
+        relevance_reason="Fresh evidence contradicts previous trust.",
+    )
+
+    record = entity.record_re_evaluation(
+        trigger=trigger,
+        request_id="REQ-RE-APP-001",
+        evidence_ids=("E-APP-001",),
+        policy_summary="signature policy -> deny",
+        decision_id="DEC-RE-APP-001",
+        resulting_state=TrustState.QUARANTINED,
+        transition_reason="Fresh evidence is contradictory.",
+    )
+
+    assert isinstance(record, ReEvaluationRecord)
+    assert len(entity.transition_history) == 2
+    assert entity.transition_history[0] is initial
+    assert entity.transition_history[0].to_state == TrustState.TRUSTED
+    assert entity.transition_history[-1].from_state == TrustState.TRUSTED
+    assert entity.transition_history[-1].to_state == TrustState.QUARANTINED
+    assert entity.transition_history[-1].reason == "Fresh evidence is contradictory."
+    assert entity.re_evaluation_history[-1] is record
+
+
+def test_trusted_to_trusted_re_evaluation_still_creates_a_new_audit_event():
+
+    entity = TrustEntity(
+        entity_id="process:trusted-recheck",
+        entity_type=EntityType.PROCESS,
+    )
+    initial = entity.transition(
+        TrustState.TRUSTED,
+        "Initial trust established.",
+        evidence_ids=("E-TRUSTED-000",),
+    )
+
+    trigger = ReEvaluationTrigger(
+        trigger_id="TRIGGER-TRUSTED-001",
+        entity_id="process:trusted-recheck",
+        trigger_type="request",
+        source="mock",
+        relevance_reason="Fresh request confirms the same trust posture remains valid.",
+    )
+
+    record = entity.record_re_evaluation(
+        trigger=trigger,
+        request_id="REQ-TRUSTED-RECHECK",
+        previous_request_id="REQ-TRUSTED-ORIGINAL",
+        evidence_ids=("E-TRUSTED-001",),
+        policy_summary="signature policy -> allow",
+        decision_id="DEC-TRUSTED-RECHECK",
+        resulting_state=TrustState.TRUSTED,
+        transition_reason="Fresh evidence validates continued trust.",
+        previous_state=TrustState.TRUSTED,
+    )
+
+    assert isinstance(record, ReEvaluationRecord)
+    assert record.previous_state == TrustState.TRUSTED
+    assert record.resulting_state == TrustState.TRUSTED
+    assert record.request_id == "REQ-TRUSTED-RECHECK"
+    assert record.previous_request_id == "REQ-TRUSTED-ORIGINAL"
+    assert len(entity.transition_history) == 2
+    assert entity.transition_history[0] is initial
+    assert entity.transition_history[-1].from_state == TrustState.TRUSTED
+    assert entity.transition_history[-1].to_state == TrustState.TRUSTED
+    assert len(entity.re_evaluation_history) == 1
+    assert entity.state == TrustState.TRUSTED
+
+
+def test_fresh_request_retains_separate_request_history():
+
+    original = SecurityRequest(
+        request_id="REQ-ORIGINAL",
+        identity={"type": "local_user", "name": "alice"},
+        subject={"type": "executable", "name": "trusted.exe"},
+        action={"type": "execute"},
+        resource={"type": "executable", "path": r"C:\trusted.exe"},
+    )
+    original.add_evidence(
+        create_evidence(
+            evidence_id="E-010",
+            category="signature",
+            source="mock",
+            value="signed",
+            strength="high",
+            verified=True,
+        )
+    )
+
+    refreshed = create_fresh_request(
+        original,
+        request_id="REQ-RECHECK",
+        context={"origin": "re-evaluation"},
+    )
+
+    assert refreshed is not original
+    assert refreshed.request_id == "REQ-RECHECK"
+    assert refreshed.context["origin"] == "re-evaluation"
+    assert refreshed.evidence == original.evidence
+    assert refreshed.history_id == original.request_id
+
+
+def test_stale_trust_re_evaluation_requires_fresh_request_context():
+
+    original = SecurityRequest(
+        request_id="REQ-ORIGINAL-TRUST",
+        identity={"type": "local_user", "name": "alice"},
+        subject={"type": "executable", "name": "trusted.exe"},
+        action={"type": "execute"},
+        resource={"type": "executable", "path": r"C:\trusted.exe"},
+    )
+    original.add_evidence(
+        create_evidence(
+            evidence_id="E-TRUST-ORIGINAL",
+            category="signature",
+            source="mock",
+            value="signed",
+            strength="high",
+            verified=True,
+        )
+    )
+
+    refreshed = create_fresh_request(
+        original,
+        request_id="REQ-RECHECK-TRUST",
+        context={"origin": "fresh-evidence-recheck"},
+    )
+
+    assert refreshed.request_id == "REQ-RECHECK-TRUST"
+    assert refreshed.history_id == original.request_id
+    assert refreshed is not original
 
 
 def test_quarantine_transition_is_recorded():
