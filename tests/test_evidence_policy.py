@@ -4,7 +4,7 @@ ACHYUTA - Pramana -> Request -> Niyama Integration
 Tests the first evidence-driven policy evaluation pipeline.
 """
 
-from engine.decision import resolve_current_decision
+from engine.decision import Decision, DecisionEffect, resolve_current_decision
 from engine.evidence import create_evidence
 from engine.policy import evaluate_policy, load_policy
 from engine.request import SecurityRequest, create_fresh_request
@@ -150,9 +150,14 @@ def test_re_evaluation_explainability_keeps_previous_state_trigger_request_evide
         entity_id="process:explainability",
         entity_type=EntityType.PROCESS,
     )
-    entity.transition(
-        TrustState.TRUSTED,
-        "Initial trust established.",
+    entity.promote_to_trusted(
+        reason="Initial trust established.",
+        decision=Decision(
+            effect=DecisionEffect.PERMIT,
+            matched_policy_ids=("P-TRACE-INIT",),
+            reason="Initial trust established.",
+            decision_id="DEC-TRACE-INIT",
+        ),
         evidence_ids=("E-TRACE-000",),
     )
 

@@ -109,10 +109,10 @@
 
 **Purpose**: Final verification, documentation, and regression safety checks.
 
-- [ ] T026 [P] Update the validation notes in `specs/002-continuous-trust-re-evaluation/quickstart.md` to reflect the implemented re-evaluation workflow
-- [ ] T027 [P] Review the feature contract in `specs/002-continuous-trust-re-evaluation/contracts/re-evaluation-contract.md` against the final implementation and update any mismatches
-- [ ] T028 Run the full repository regression suite for the trust and evaluation flow using `pytest` across `tests/`
-- [ ] T029 Remove redundant or dead code paths and confirm the architecture remains aligned with the constitution and ADRs in `engine/` and the feature docs
+- [x] T026 [P] Update the validation notes in `specs/002-continuous-trust-re-evaluation/quickstart.md` to reflect the implemented re-evaluation workflow
+- [x] T027 [P] Review the feature contract in `specs/002-continuous-trust-re-evaluation/contracts/re-evaluation-contract.md` against the final implementation and update any mismatches
+- [x] T028 Run the full repository regression suite for the trust and evaluation flow using `pytest` across `tests/`
+- [x] T029 Remove redundant or dead code paths and confirm the architecture remains aligned with the constitution and ADRs in `engine/` and the feature docs
 
 ---
 

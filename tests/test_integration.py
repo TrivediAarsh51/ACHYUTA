@@ -2,6 +2,7 @@
 ACHYUTA - End-to-End Evidence + Policy Test
 """
 
+from engine.decision import Decision, DecisionEffect
 from engine.evidence import create_evidence
 from engine.request import SecurityRequest, create_fresh_request, requires_re_evaluation
 from engine.policy import evaluate_policy
@@ -77,9 +78,14 @@ def test_request_evidence_identifier_can_be_recorded_by_trust_layer():
         entity_id="process:trusted",
         entity_type=EntityType.PROCESS,
     )
-    transition = entity.transition(
-        TrustState.TRUSTED,
-        "Signature evidence supports the process.",
+    transition = entity.promote_to_trusted(
+        reason="Signature evidence supports the process.",
+        decision=Decision(
+            effect=DecisionEffect.PERMIT,
+            matched_policy_ids=("POL-TRUSTED-REQ",),
+            reason="Signature evidence supports the process.",
+            decision_id="DEC-TRUSTED-REQ",
+        ),
         evidence_ids=tuple(item.evidence_id for item in request.evidence),
     )
 

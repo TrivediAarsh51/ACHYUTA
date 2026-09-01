@@ -4,6 +4,7 @@ ACHYUTA - Trust State Engine Tests
 
 import pytest
 
+from engine.decision import Decision, DecisionEffect
 from engine.evidence import create_evidence
 from engine.request import SecurityRequest, create_fresh_request
 from engine.trust import (
@@ -33,6 +34,9 @@ def test_canonical_entity_types_start_unknown():
 def test_each_supported_trust_state_can_be_reached():
 
     for index, state in enumerate(TrustState):
+        if state is TrustState.TRUSTED:
+            continue
+
         entity = TrustEntity(
             entity_id=f"process:state-{index}",
             entity_type=EntityType.PROCESS,
@@ -193,6 +197,147 @@ def test_state_attribute_cannot_be_directly_mutated_to_trusted():
     assert tuple(entity.transition_history) == original_history
 
 
+def test_transition_to_trusted_is_rejected_by_the_controlled_boundary():
+
+    entity = TrustEntity(
+        entity_id="process:controlled-trusted-boundary",
+        entity_type=EntityType.PROCESS,
+    )
+
+    with pytest.raises(ValueError):
+        entity.transition(
+            TrustState.TRUSTED,
+            "Direct TRUSTED promotion is forbidden.",
+            evidence_ids=("E-TRUSTED-CTRL-001",),
+        )
+
+    assert entity.state == TrustState.UNKNOWN
+    assert entity.transition_history == []
+
+
+def test_dedicated_trusted_promotion_api_exists():
+
+    entity = TrustEntity(
+        entity_id="process:dedicated-trusted-promotion",
+        entity_type=EntityType.PROCESS,
+    )
+
+    assert hasattr(entity, "promote_to_trusted")
+    assert callable(entity.promote_to_trusted)
+
+
+def test_controlled_trusted_promotion_requires_valid_decision_context():
+
+    entity = TrustEntity(
+        entity_id="process:promotion-needs-decision",
+        entity_type=EntityType.PROCESS,
+    )
+
+    with pytest.raises((TypeError, ValueError, PermissionError)):
+        entity.promote_to_trusted(
+            reason="Promotion without a valid decision should fail.",
+            decision=None,
+            evidence_ids=("E-TRUSTED-PROMO-001",),
+        )
+
+    assert entity.state == TrustState.UNKNOWN
+    assert entity.transition_history == []
+
+
+def test_controlled_trusted_promotion_requires_supporting_evidence_ids():
+
+    entity = TrustEntity(
+        entity_id="process:promotion-needs-evidence",
+        entity_type=EntityType.PROCESS,
+    )
+
+    decision = Decision(
+        effect=DecisionEffect.PERMIT,
+        matched_policy_ids=("POL-ALLOW",),
+        reason="Authorization allowed the request.",
+        decision_id="DEC-ALLOW-001",
+    )
+
+    with pytest.raises((ValueError, PermissionError)):
+        entity.promote_to_trusted(
+            reason="Cannot promote without evidence.",
+            decision=decision,
+            evidence_ids=(),
+        )
+
+    assert entity.state == TrustState.UNKNOWN
+    assert entity.transition_history == []
+
+
+def test_raw_permit_value_is_not_sufficient_for_trusted_promotion():
+
+    entity = TrustEntity(
+        entity_id="process:permit-is-not-trust",
+        entity_type=EntityType.PROCESS,
+    )
+
+    with pytest.raises((TypeError, ValueError, PermissionError)):
+        entity.promote_to_trusted(
+            reason="A raw permit string must not establish TRUSTED.",
+            decision="permit",
+            evidence_ids=("E-TRUSTED-PERMIT-001",),
+        )
+
+    assert entity.state == TrustState.UNKNOWN
+    assert entity.transition_history == []
+
+
+def test_valid_decision_and_evidence_preserve_immutable_audit_trail():
+
+    entity = TrustEntity(
+        entity_id="process:valid-trusted-promotion",
+        entity_type=EntityType.PROCESS,
+    )
+
+    decision = Decision(
+        effect=DecisionEffect.PERMIT,
+        matched_policy_ids=("POL-ALLOW",),
+        reason="Verified and permitted execution.",
+        decision_id="DEC-ALLOW-VALID",
+    )
+
+    transition = entity.promote_to_trusted(
+        reason="Verified process met the allow policy.",
+        decision=decision,
+        evidence_ids=("E-VALID-001", "E-VALID-002"),
+    )
+
+    assert entity.state == TrustState.TRUSTED
+    assert transition.from_state == TrustState.UNKNOWN
+    assert transition.to_state == TrustState.TRUSTED
+    assert transition.evidence_ids == ("E-VALID-001", "E-VALID-002")
+    assert entity.transition_history[-1] is transition
+    assert entity.transition_history[-1].reason == "Verified process met the allow policy."
+
+    with pytest.raises(AttributeError):
+        entity.transition_history[-1].reason = "tampered reason"
+
+
+def test_non_trusted_transitions_continue_to_work():
+
+    entity = TrustEntity(
+        entity_id="process:non-trusted-transition",
+        entity_type=EntityType.PROCESS,
+    )
+
+    transition = entity.transition(
+        TrustState.UNVERIFIED,
+        "Verification remains pending.",
+        evidence_ids=("E-VERIFY-001",),
+    )
+
+    assert entity.state == TrustState.UNVERIFIED
+    assert transition.from_state == TrustState.UNKNOWN
+    assert transition.to_state == TrustState.UNVERIFIED
+    assert transition.evidence_ids == ("E-VERIFY-001",)
+    assert len(entity.transition_history) == 1
+
+
 def test_deny_process_results_in_quarantine():
 
     state = trust_state_from_decision(
@@ -254,9 +399,16 @@ def test_trusted_transition_is_recorded():
         entity_type=EntityType.PROCESS,
     )
 
-    transition = entity.transition(
-        TrustState.TRUSTED,
-        "Process successfully verified.",
+    decision = Decision(
+        effect=DecisionEffect.PERMIT,
+        matched_policy_ids=("POL-TRUSTED-001",),
+        reason="Process successfully verified.",
+        decision_id="DEC-TRUSTED-001",
+    )
+
+    transition = entity.promote_to_trusted(
+        reason="Process successfully verified.",
+        decision=decision,
         evidence_ids=("E-001",),
     )
 
@@ -272,9 +424,15 @@ def test_re_evaluation_history_records_trigger_and_audit_metadata():
         entity_id="process:re-eval",
         entity_type=EntityType.PROCESS,
     )
-    entity.transition(
-        TrustState.TRUSTED,
-        "Initial trust established.",
+    decision = Decision(
+        effect=DecisionEffect.PERMIT,
+        matched_policy_ids=("POL-RE-EVAL-INIT",),
+        reason="Initial trust established.",
+        decision_id="DEC-RE-EVAL-INIT",
+    )
+    entity.promote_to_trusted(
+        reason="Initial trust established.",
+        decision=decision,
         evidence_ids=("E-000",),
     )
 
@@ -309,9 +467,14 @@ def test_re_evaluation_record_creates_append_only_transition_entry():
         entity_id="process:append-only-audit",
         entity_type=EntityType.PROCESS,
     )
-    initial = entity.transition(
-        TrustState.TRUSTED,
-        "Initial trust established.",
+    initial = entity.promote_to_trusted(
+        reason="Initial trust established.",
+        decision=Decision(
+            effect=DecisionEffect.PERMIT,
+            matched_policy_ids=("POL-APP-INIT",),
+            reason="Initial trust established.",
+            decision_id="DEC-APP-INIT",
+        ),
         evidence_ids=("E-APP-000",),
     )
 
@@ -349,9 +512,14 @@ def test_trusted_to_trusted_re_evaluation_still_creates_a_new_audit_event():
         entity_id="process:trusted-recheck",
         entity_type=EntityType.PROCESS,
     )
-    initial = entity.transition(
-        TrustState.TRUSTED,
-        "Initial trust established.",
+    initial = entity.promote_to_trusted(
+        reason="Initial trust established.",
+        decision=Decision(
+            effect=DecisionEffect.PERMIT,
+            matched_policy_ids=("POL-TRUSTED-INIT",),
+            reason="Initial trust established.",
+            decision_id="DEC-TRUSTED-INIT",
+        ),
         evidence_ids=("E-TRUSTED-000",),
     )
 
@@ -552,9 +720,15 @@ def test_transition_history_is_chronological_and_matches_current_state():
         TrustState.QUARANTINED,
         "Suspicious execution was observed.",
     )
-    second = entity.transition(
-        TrustState.TRUSTED,
-        "Verification completed successfully.",
+    second = entity.promote_to_trusted(
+        reason="Verification completed successfully.",
+        decision=Decision(
+            effect=DecisionEffect.PERMIT,
+            matched_policy_ids=("POL-HISTORY-TRUSTED",),
+            reason="Verification completed successfully.",
+            decision_id="DEC-HISTORY-TRUSTED",
+        ),
+        evidence_ids=("E-HISTORY-001",),
     )
 
     assert entity.transition_history == [first, second]

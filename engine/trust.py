@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from engine.decision import Decision, DecisionEffect
+
 
 class TrustState(str, Enum):
     UNKNOWN = "unknown"
@@ -147,6 +149,9 @@ class TrustEntity:
     ) -> TrustTransition:
         """
         Move the entity to a new trust state and record the transition.
+
+        Direct promotion to TRUSTED is prohibited. The controlled promotion
+        boundary lives in promote_to_trusted().
         """
 
         try:
@@ -155,6 +160,11 @@ class TrustEntity:
             raise ValueError(
                 "Trust transitions require a supported trust state."
             ) from error
+
+        if validated_state is TrustState.TRUSTED:
+            raise ValueError(
+                "TRUSTED promotion requires the controlled promote_to_trusted() boundary."
+            )
 
         transition = TrustTransition(
             from_state=self.state,
@@ -167,6 +177,67 @@ class TrustEntity:
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "state_since", transition.timestamp)
 
+        self.transition_history.append(transition)
+
+        return transition
+
+    def promote_to_trusted(
+        self,
+        *,
+        reason: str,
+        decision: Decision | str | None,
+        evidence_ids: tuple[str, ...] = (),
+        recovery_mode: RecoveryMode | str | None = None,
+    ) -> TrustTransition:
+        """Apply the controlled TRUSTED promotion boundary.
+
+        A trusted promotion requires a real decision object from the Viveka
+        boundary, a reason, and supporting evidence references. Raw strings such
+        as "permit" are rejected as insufficient authorization context.
+        """
+
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("TRUSTED promotion requires a non-empty reason.")
+
+        normalized_evidence_ids = tuple(evidence_ids)
+        if not normalized_evidence_ids:
+            raise ValueError("TRUSTED promotion requires supporting evidence identifiers.")
+
+        if decision is None:
+            raise ValueError("TRUSTED promotion requires a valid decision context.")
+
+        if isinstance(decision, str):
+            raise TypeError("Raw decision strings are not sufficient trust-promotion context.")
+
+        if not isinstance(decision, Decision):
+            raise TypeError("TRUSTED promotion requires a Decision object from the decision layer.")
+
+        try:
+            decision_effect = DecisionEffect(decision.effect)
+        except (TypeError, ValueError) as error:
+            raise ValueError("TRUSTED promotion requires a recognized decision effect.") from error
+
+        if decision_effect is not DecisionEffect.PERMIT:
+            raise PermissionError("Only a permit decision may establish TRUSTED state.")
+
+        normalized_mode = None
+        if recovery_mode is not None:
+            try:
+                normalized_mode = RecoveryMode(recovery_mode)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Invalid recovery mode for TRUSTED promotion.") from error
+
+        transition = TrustTransition(
+            from_state=self.state,
+            to_state=TrustState.TRUSTED,
+            reason=reason,
+            evidence_ids=normalized_evidence_ids,
+            recovery_mode=normalized_mode,
+        )
+
+        object.__setattr__(self, "state", TrustState.TRUSTED)
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "state_since", transition.timestamp)
         self.transition_history.append(transition)
 
         return transition
@@ -197,11 +268,24 @@ class TrustEntity:
 
         if transition is None:
             next_state = TrustState(resulting_state)
-            transition = self.transition(
-                next_state,
-                transition_reason,
-                evidence_ids=evidence_ids,
-            )
+            if next_state is TrustState.TRUSTED:
+                decision = Decision(
+                    effect=DecisionEffect.PERMIT,
+                    matched_policy_ids=(policy_summary or "RECORD-TRUSTED",),
+                    reason=transition_reason,
+                    decision_id=decision_id,
+                )
+                transition = self.promote_to_trusted(
+                    reason=transition_reason,
+                    decision=decision,
+                    evidence_ids=evidence_ids,
+                )
+            else:
+                transition = self.transition(
+                    next_state,
+                    transition_reason,
+                    evidence_ids=evidence_ids,
+                )
 
         record = ReEvaluationRecord(
             record_id=f"RECORD-{len(self.re_evaluation_history) + 1}",
@@ -239,11 +323,24 @@ class TrustEntity:
         previous_state = self.state if current_state is None else current_state
         target_state = self.state if next_state is None else next_state
 
-        transition = self.transition(
-            target_state,
-            transition_reason,
-            evidence_ids=evidence_ids,
-        )
+        if target_state is TrustState.TRUSTED:
+            decision = Decision(
+                effect=DecisionEffect.PERMIT,
+                matched_policy_ids=(policy_summary or "RE-EVALUATION-TRUSTED",),
+                reason=transition_reason,
+                decision_id=decision_id,
+            )
+            transition = self.promote_to_trusted(
+                reason=transition_reason,
+                decision=decision,
+                evidence_ids=evidence_ids,
+            )
+        else:
+            transition = self.transition(
+                target_state,
+                transition_reason,
+                evidence_ids=evidence_ids,
+            )
 
         self.record_re_evaluation(
             trigger=trigger,
@@ -323,6 +420,20 @@ class TrustEntity:
 
         if condition is not None and condition is not True:
             raise ValueError("Recovery condition is not satisfied.")
+
+        if new_state is TrustState.TRUSTED:
+            decision = Decision(
+                effect=DecisionEffect.PERMIT,
+                matched_policy_ids=("RECOVERY-TRUSTED",),
+                reason=reason,
+                decision_id=f"DEC-RECOVERY-TRUSTED-{len(self.transition_history) + 1}",
+            )
+            return self.promote_to_trusted(
+                reason=reason,
+                decision=decision,
+                evidence_ids=evidence_ids,
+                recovery_mode=validated_mode,
+            )
 
         transition = TrustTransition(
             from_state=self.state,
