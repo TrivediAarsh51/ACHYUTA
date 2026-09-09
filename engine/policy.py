@@ -23,7 +23,10 @@ It only determines which policies match a request.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +39,172 @@ from engine.request import SecurityRequest
 # ---------------------------------------------------------------------------
 # Data Models
 # ---------------------------------------------------------------------------
+class PolicyLifecycleState(str, Enum):
+    """States in the controlled policy activation lifecycle."""
+
+    DRAFT = "draft"
+    VALIDATED = "validated"
+    VERIFIED = "verified"
+    APPROVED = "approved"
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUSPENDED = "suspended"
+
+
+PolicyState = PolicyLifecycleState
+
+
+@dataclass(frozen=True)
+class PolicyLifecycleEvent:
+    """Immutable record of a controlled policy lifecycle transition."""
+
+    from_state: PolicyLifecycleState
+    to_state: PolicyLifecycleState
+    context: dict[str, Any] = field(default_factory=dict)
+    reason: str = ""
+
+
+@dataclass
+class PolicyRecord:
+    """Versioned policy metadata and its controlled lifecycle state."""
+
+    policy_id: str
+    name: str
+    version: int | str
+    provenance: dict[str, Any]
+    definition: dict[str, Any]
+    lifecycle_state: PolicyLifecycleState = PolicyLifecycleState.DRAFT
+    validation_context: dict[str, Any] | None = None
+    verification_context: dict[str, Any] | None = None
+    approval_context: dict[str, Any] | None = None
+    lifecycle_history: list[PolicyLifecycleEvent] = field(default_factory=list)
+    integrity_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not self.policy_id.strip() or not self.name.strip():
+            raise ValueError("Policy ID and name cannot be empty.")
+        if not isinstance(self.provenance, dict) or not self.provenance:
+            raise ValueError("Policy provenance is required.")
+        if not isinstance(self.definition, dict):
+            raise ValueError("Policy definition must be a mapping.")
+        self.lifecycle_state = PolicyLifecycleState(self.lifecycle_state)
+        self.integrity_digest = self._calculate_integrity_digest()
+
+    @classmethod
+    def from_policy(cls, policy: dict[str, Any], *, provenance: dict[str, Any]) -> "PolicyRecord":
+        """Create a lifecycle record from an existing evaluator policy mapping."""
+
+        if not isinstance(policy, dict):
+            raise TypeError("Policy must be a mapping.")
+        return cls(
+            policy_id=str(policy.get("id") or ""),
+            name=str(policy.get("name") or "Unnamed Policy"),
+            version=policy.get("version", 1),
+            provenance=provenance,
+            definition=dict(policy),
+        )
+
+    def _integrity_payload(self) -> str:
+        return json.dumps(
+            {
+                "policy_id": self.policy_id,
+                "name": self.name,
+                "version": self.version,
+                "provenance": self.provenance,
+                "definition": self.definition,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+    def _calculate_integrity_digest(self) -> str:
+        return hashlib.sha256(self._integrity_payload().encode("utf-8")).hexdigest()
+
+    @property
+    def integrity_valid(self) -> bool:
+        """Return whether the policy still matches its recorded digest."""
+
+        valid = self._calculate_integrity_digest() == self.integrity_digest
+        if not valid and self.lifecycle_state in {
+            PolicyLifecycleState.APPROVED,
+            PolicyLifecycleState.ACTIVE,
+        }:
+            previous_state = self.lifecycle_state
+            self.lifecycle_state = PolicyLifecycleState.DRAFT
+            self.lifecycle_history.append(
+                PolicyLifecycleEvent(
+                    from_state=previous_state,
+                    to_state=PolicyLifecycleState.DRAFT,
+                    reason="Policy integrity changed; re-validation is required.",
+                )
+            )
+        return valid
+
+    def _transition(
+        self,
+        target: PolicyLifecycleState,
+        context: dict[str, Any],
+        reason: str,
+    ) -> None:
+        event = PolicyLifecycleEvent(
+            from_state=self.lifecycle_state,
+            to_state=target,
+            context=dict(context),
+            reason=reason,
+        )
+        self.lifecycle_history.append(event)
+        self.lifecycle_state = target
+
+    def validate(self, context: dict[str, Any]) -> None:
+        """Record explicit validation and establish the current integrity baseline."""
+
+        if self.lifecycle_state is not PolicyLifecycleState.DRAFT:
+            raise ValueError("Only draft policies can be validated.")
+        if not isinstance(context, dict) or not context:
+            raise ValueError("Validation context is required.")
+        self.validation_context = dict(context)
+        self.verification_context = None
+        self.approval_context = None
+        self.integrity_digest = self._calculate_integrity_digest()
+        self._transition(PolicyLifecycleState.VALIDATED, context, "Policy validated.")
+
+    def verify(self, context: dict[str, Any]) -> None:
+        """Record explicit verification of the validated policy contents."""
+
+        if self.lifecycle_state is not PolicyLifecycleState.VALIDATED:
+            raise ValueError("Only validated policies can be verified.")
+        if not isinstance(context, dict) or not context:
+            raise ValueError("Verification context is required.")
+        if not self.integrity_valid:
+            raise PermissionError("Modified policies must be revalidated before verification.")
+        self.verification_context = dict(context)
+        self._transition(PolicyLifecycleState.VERIFIED, context, "Policy verified.")
+
+    def approve(self, context: dict[str, Any]) -> None:
+        """Record explicit approval after validation and verification."""
+
+        if self.lifecycle_state is not PolicyLifecycleState.VERIFIED:
+            raise ValueError("Only verified policies can be approved.")
+        if not isinstance(context, dict) or not context:
+            raise ValueError("Approval context is required.")
+        if not self.integrity_valid:
+            raise PermissionError("Modified policies must be revalidated before approval.")
+        self.approval_context = dict(context)
+        self._transition(PolicyLifecycleState.APPROVED, context, "Policy approved.")
+
+    def activate(self) -> None:
+        """Activate only an intact policy with all required lifecycle context."""
+
+        if not self.integrity_valid:
+            raise PermissionError("Policy integrity is invalid; revalidation and reapproval are required.")
+        if self.lifecycle_state is not PolicyLifecycleState.APPROVED:
+            raise PermissionError("Only approved policies can be activated.")
+        if not self.validation_context or not self.verification_context or not self.approval_context:
+            raise PermissionError("Validation, verification, and approval context are required.")
+        self._transition(PolicyLifecycleState.ACTIVE, {}, "Policy activated.")
+
+
 @dataclass
 class PolicyResult:
     """

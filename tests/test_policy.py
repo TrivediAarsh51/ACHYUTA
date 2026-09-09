@@ -2,12 +2,108 @@
 Tests for ACHYUTA Niyama Policy Engine v0.1
 """
 
+import pytest
+
 from engine.policy import (
+    PolicyLifecycleState,
+    PolicyRecord,
     evaluate_policy,
     load_policy,
 )
 
 from engine.request import SecurityRequest, requires_re_evaluation
+
+
+def _lifecycle_policy() -> PolicyRecord:
+    return PolicyRecord(
+        policy_id="P-LIFECYCLE-001",
+        name="Lifecycle policy",
+        version=1,
+        provenance={"source": "test", "storage": "trusted"},
+        definition={"effect": "deny", "conditions": {"action": {"type": "execute"}}},
+    )
+
+
+def test_draft_policy_cannot_activate():
+    policy = _lifecycle_policy()
+
+    assert policy.lifecycle_state is PolicyLifecycleState.DRAFT
+
+    with pytest.raises(PermissionError):
+        policy.activate()
+
+
+def test_validation_alone_cannot_activate():
+    policy = _lifecycle_policy()
+    policy.validate({"validator": "test", "result": "pass"})
+
+    with pytest.raises(PermissionError):
+        policy.activate()
+
+
+def test_approval_without_validation_and_verification_cannot_activate():
+    policy = _lifecycle_policy()
+
+    with pytest.raises(ValueError):
+        policy.approve({"approver": "admin"})
+
+
+def test_validated_verified_approved_policy_can_activate():
+    policy = _lifecycle_policy()
+    policy.validate({"validator": "test", "result": "pass"})
+    policy.verify({"verifier": "test", "result": "pass"})
+    policy.approve({"approver": "admin", "ticket": "SEC-1"})
+
+    policy.activate()
+
+    assert policy.lifecycle_state is PolicyLifecycleState.ACTIVE
+
+
+def test_modification_changes_integrity_status():
+    policy = _lifecycle_policy()
+    original_digest = policy.integrity_digest
+
+    policy.definition["effect"] = "permit"
+
+    assert policy.integrity_digest == original_digest
+    assert policy.integrity_valid is False
+
+
+def test_modified_active_policy_requires_revalidation_and_reapproval():
+    policy = _lifecycle_policy()
+    policy.validate({"validator": "test", "result": "pass"})
+    policy.verify({"verifier": "test", "result": "pass"})
+    policy.approve({"approver": "admin"})
+    policy.activate()
+    policy.definition["effect"] = "permit"
+
+    with pytest.raises(PermissionError):
+        policy.activate()
+
+    assert policy.lifecycle_state is not PolicyLifecycleState.ACTIVE
+
+
+def test_trusted_storage_path_does_not_authorize_activation():
+    policy = _lifecycle_policy()
+    policy.provenance["path"] = "C:\\ProgramData\\ACHYUTA\\policies"
+
+    with pytest.raises(PermissionError):
+        policy.activate()
+
+
+def test_lifecycle_history_is_preserved():
+    policy = _lifecycle_policy()
+    policy.validate({"validator": "test", "result": "pass"})
+    policy.verify({"verifier": "test", "result": "pass"})
+    policy.approve({"approver": "admin"})
+    policy.activate()
+
+    assert [event.to_state for event in policy.lifecycle_history] == [
+        PolicyLifecycleState.VALIDATED,
+        PolicyLifecycleState.VERIFIED,
+        PolicyLifecycleState.APPROVED,
+        PolicyLifecycleState.ACTIVE,
+    ]
 
 def test_unsigned_executable_is_denied(tmp_path):
 

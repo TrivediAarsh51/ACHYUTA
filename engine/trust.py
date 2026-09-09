@@ -17,7 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from engine.decision import Decision, DecisionEffect
 
@@ -44,6 +45,59 @@ class RecoveryMode(str, Enum):
     HUMAN_APPROVAL = "human_approval"
 
 
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze(item) for item in value)
+    return value
+
+
+class _AppendOnlyHistory(list[Any]):
+    """List-compatible history that only its owner can append to."""
+
+    def append(self, value: Any) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def _append(self, value: Any) -> None:
+        super().append(value)
+
+    def extend(self, values) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def insert(self, index, value) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def clear(self) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def pop(self, index=-1):
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def remove(self, value) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def __setitem__(self, key, value) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def __delitem__(self, key) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def __iadd__(self, values):
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def __imul__(self, value):
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def reverse(self) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+    def sort(self, *args, **kwargs) -> None:
+        raise AttributeError("History is append-only and cannot be modified externally.")
+
+
 @dataclass(frozen=True)
 class TrustTransition:
     """
@@ -58,6 +112,8 @@ class TrustTransition:
     )
     evidence_ids: tuple[str, ...] = ()
     recovery_mode: RecoveryMode | None = None
+    policy_context: Mapping[str, Any] = field(default_factory=dict)
+    decision_context: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         try:
@@ -76,6 +132,8 @@ class TrustTransition:
         object.__setattr__(self, "from_state", from_state)
         object.__setattr__(self, "to_state", to_state)
         object.__setattr__(self, "evidence_ids", tuple(self.evidence_ids))
+        object.__setattr__(self, "policy_context", _freeze(dict(self.policy_context)))
+        object.__setattr__(self, "decision_context", _freeze(dict(self.decision_context)))
         if self.recovery_mode is not None:
             try:
                 recovery_mode = RecoveryMode(self.recovery_mode)
@@ -84,6 +142,14 @@ class TrustTransition:
                     "Trust transitions require a supported recovery mode."
                 ) from error
             object.__setattr__(self, "recovery_mode", recovery_mode)
+
+    @property
+    def previous_state(self) -> TrustState:
+        return self.from_state
+
+    @property
+    def resulting_state(self) -> TrustState:
+        return self.to_state
 
 
 @dataclass
@@ -101,7 +167,7 @@ class TrustEntity:
     )
 
     transition_history: list[TrustTransition] = field(
-        default_factory=list
+        default_factory=_AppendOnlyHistory
     )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -138,7 +204,7 @@ class TrustEntity:
         object.__setattr__(self, "_state_locked", True)
 
     re_evaluation_history: list["ReEvaluationRecord"] = field(
-        default_factory=list
+        default_factory=_AppendOnlyHistory
     )
 
     def transition(
@@ -146,6 +212,9 @@ class TrustEntity:
         new_state: TrustState,
         reason: str,
         evidence_ids: tuple[str, ...] = (),
+        *,
+        policy_context: Mapping[str, Any] | None = None,
+        decision_context: Mapping[str, Any] | None = None,
     ) -> TrustTransition:
         """
         Move the entity to a new trust state and record the transition.
@@ -171,13 +240,15 @@ class TrustEntity:
             to_state=validated_state,
             reason=reason,
             evidence_ids=evidence_ids,
+            policy_context=policy_context or {},
+            decision_context=decision_context or {},
         )
 
         object.__setattr__(self, "state", validated_state)
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "state_since", transition.timestamp)
 
-        self.transition_history.append(transition)
+        self.transition_history._append(transition)
 
         return transition
 
@@ -188,6 +259,8 @@ class TrustEntity:
         decision: Decision | str | None,
         evidence_ids: tuple[str, ...] = (),
         recovery_mode: RecoveryMode | str | None = None,
+        policy_context: Mapping[str, Any] | None = None,
+        decision_context: Mapping[str, Any] | None = None,
     ) -> TrustTransition:
         """Apply the controlled TRUSTED promotion boundary.
 
@@ -233,12 +306,14 @@ class TrustEntity:
             reason=reason,
             evidence_ids=normalized_evidence_ids,
             recovery_mode=normalized_mode,
+            policy_context=policy_context or {},
+            decision_context=decision_context or {},
         )
 
         object.__setattr__(self, "state", TrustState.TRUSTED)
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "state_since", transition.timestamp)
-        self.transition_history.append(transition)
+        self.transition_history._append(transition)
 
         return transition
 
@@ -302,7 +377,7 @@ class TrustEntity:
             created_at=datetime.now(timezone.utc),
         )
 
-        self.re_evaluation_history.append(record)
+        self.re_evaluation_history._append(record)
         return record
 
     def evaluate_re_evaluation(
@@ -375,6 +450,8 @@ class TrustEntity:
         human_approved: bool = False,
         condition: bool | None = None,
         recovery_modes: tuple[RecoveryMode | str, ...] | None = None,
+        policy_context: Mapping[str, Any] | None = None,
+        decision_context: Mapping[str, Any] | None = None,
     ) -> TrustTransition:
         """
         Validate and record recovery for this entity only.
@@ -433,6 +510,8 @@ class TrustEntity:
                 decision=decision,
                 evidence_ids=evidence_ids,
                 recovery_mode=validated_mode,
+                policy_context=policy_context,
+                decision_context=decision_context,
             )
 
         transition = TrustTransition(
@@ -441,12 +520,14 @@ class TrustEntity:
             reason=reason,
             evidence_ids=evidence_ids,
             recovery_mode=validated_mode,
+            policy_context=policy_context or {},
+            decision_context=decision_context or {},
         )
 
         object.__setattr__(self, "state", transition.to_state)
         object.__setattr__(self, "reason", transition.reason)
         object.__setattr__(self, "state_since", transition.timestamp)
-        self.transition_history.append(transition)
+        self.transition_history._append(transition)
 
         return transition
 
@@ -553,9 +634,14 @@ def build_trust_explanation(
     evidence_items = tuple(getattr(request, "evidence", ()))
     if evidence_ids is None:
         evidence_ids = tuple(
-            getattr(item, "evidence_id", item.get("evidence_id", "unknown"))
-            if hasattr(item, "evidence_id")
-            else item.get("evidence_id", "unknown")
+            str(
+                (
+                    getattr(item, "evidence_id", None)
+                    if hasattr(item, "evidence_id")
+                    else item.get("evidence_id")
+                )
+                or "unknown"
+            )
             for item in evidence_items
         )
 

@@ -318,6 +318,40 @@ def test_valid_decision_and_evidence_preserve_immutable_audit_trail():
         entity.transition_history[-1].reason = "tampered reason"
 
 
+def test_trust_transition_preserves_policy_and_decision_context():
+    entity = TrustEntity(
+        entity_id="process:contextual-transition",
+        entity_type=EntityType.PROCESS,
+    )
+    transition = entity.transition(
+        TrustState.QUARANTINED,
+        "Contradictory evidence requires quarantine.",
+        evidence_ids=("E-CONTEXT-001",),
+        policy_context={"POL-001": {"version": 2, "state": "active"}},
+        decision_context={"decision_id": "DEC-CONTEXT-001", "effect": "quarantine"},
+    )
+
+    assert transition.previous_state is TrustState.UNKNOWN
+    assert transition.resulting_state is TrustState.QUARANTINED
+    assert transition.policy_context["POL-001"]["version"] == 2
+    assert transition.decision_context["decision_id"] == "DEC-CONTEXT-001"
+    with pytest.raises(TypeError):
+        transition.policy_context["POL-001"]["version"] = 3
+
+
+def test_trust_transition_history_is_append_only():
+    entity = TrustEntity(
+        entity_id="process:append-only-history",
+        entity_type=EntityType.PROCESS,
+    )
+
+    with pytest.raises(AttributeError):
+        entity.transition_history.append("forged transition")
+
+    entity.transition(TrustState.UNVERIFIED, "Verification is pending.")
+    assert len(entity.transition_history) == 1
+
+
 def test_non_trusted_transitions_continue_to_work():
 
     entity = TrustEntity(
