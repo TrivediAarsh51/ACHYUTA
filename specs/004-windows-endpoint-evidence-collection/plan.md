@@ -181,7 +181,7 @@ The current runtime audit list is an evaluation record, not a collector pipeline
 ## Failure Handling
 
 | Condition | Collection result | Evidence result | Downstream behavior |
-|---|---|---|---|
+| --- | --- | --- |
 | Non-Windows host | `unsupported_platform` failure | None | Caller may skip collection; engine behavior is unchanged |
 | Provider unavailable | `unavailable` failure | None | Request continues only with other evidence; no affirmative Windows claim |
 | Access denied for a process or field | `access_denied` failure | No evidence for that incomplete process | Missing signal remains non-affirmative |

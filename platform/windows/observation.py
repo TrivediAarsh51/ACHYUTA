@@ -12,6 +12,8 @@ class CollectionStatus(str, Enum):
     """Non-authorization statuses for a Windows collection attempt."""
 
     SUCCESS = "SUCCESS"
+    MISSING = "MISSING"
+    INACCESSIBLE = "INACCESSIBLE"
     UNAVAILABLE = "UNAVAILABLE"
     PERMISSION_DENIED = "PERMISSION_DENIED"
     STALE = "STALE"
