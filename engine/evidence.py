@@ -152,6 +152,7 @@ def create_evidence(
     strength: str = "medium",
     verified: bool = False,
     metadata: dict[str, Any] | None = None,
+    timestamp: datetime | None = None,
 ) -> Evidence:
     """
     Create and validate an Evidence object.
@@ -163,6 +164,7 @@ def create_evidence(
         source=source,
         value=value,
         strength=strength,
+        timestamp=timestamp or datetime.now(timezone.utc),
         verified=verified,
         metadata=metadata or {},
     )

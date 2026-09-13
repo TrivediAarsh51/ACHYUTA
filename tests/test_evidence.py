@@ -2,6 +2,8 @@
 Tests for ACHYUTA Pramana Evidence Engine v0.1
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from engine.evidence import (
@@ -29,6 +31,20 @@ def test_create_valid_evidence():
     assert evidence.value == "unsigned"
     assert evidence.strength == "high"
     assert evidence.verified is True
+
+
+def test_create_evidence_preserves_explicit_timestamp():
+    observed_at = datetime(2026, 9, 9, 12, 30, tzinfo=timezone.utc)
+
+    evidence = create_evidence(
+        evidence_id="E-TIMESTAMP-001",
+        category="process",
+        source="test",
+        value={"process_id": 42},
+        timestamp=observed_at,
+    )
+
+    assert evidence.timestamp == observed_at
 
 
 def test_invalid_strength_is_rejected():
