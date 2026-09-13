@@ -20,7 +20,7 @@ The observation is not mutated and is not replaced by a signature-specific obser
 Platform-local normalized result supplied by the injected or native inspector before canonical evidence creation.
 
 | Field | Type | Meaning |
-| --- | --- | --- |
+| --- | --- | --- | -- |
 | `status` | `CollectionStatus` or normalized signature status | Inspection outcome such as signed, unsigned, invalid, inaccessible, unsupported, malformed, or unverifiable |
 | `signature_present` | `bool | None` | Whether a signature was observed; `None` when it cannot be determined |
 | `validation_status` | `str | None` | Platform-reported validation state, preserved without project trust interpretation |
