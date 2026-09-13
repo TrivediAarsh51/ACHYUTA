@@ -9,6 +9,7 @@ from engine.trust import EntityType, TrustEntity, TrustState
 from platform.windows.collector import WindowsProcessCollector
 from platform.windows.file_evidence import collect_file_evidence
 from platform.windows.observation import WindowsObservation
+from platform.windows.signature_evidence import SignatureInspection, collect_signature_evidence
 
 
 class StaticProvider:
@@ -211,4 +212,90 @@ def test_non_affirmative_file_evidence_reaches_risk_without_collector_decision(t
     assert file_result.evidence.value["status"] == "MISSING"
     assert result.risk.evidence_ids == (file_result.evidence.evidence_id,)
     assert not hasattr(file_result, "decision")
+    assert entity.state is TrustState.QUARANTINED
+
+
+def test_signature_evidence_uses_existing_runtime_flow(tmp_path):
+    executable = tmp_path / "signed-tool.exe"
+    executable.write_bytes(b"signed runtime evidence")
+    observation = WindowsObservation(
+        process_id=5353,
+        process_name="signed-tool.exe",
+        executable_path=str(executable),
+        parent_process_id=1000,
+        user_identity="S-1-5-21-operator",
+        observed_at=datetime(2026, 9, 13, 14, 0, tzinfo=timezone.utc),
+    )
+
+    class SignedInspector:
+        def inspect(self, path):
+            assert path == executable
+            return SignatureInspection(
+                status="SUCCESS",
+                signature_present=True,
+                validation_status="Valid",
+                signing_source="embedded_authenticode",
+                signer_subject="CN=Example Publisher",
+            )
+
+    signature_result = collect_signature_evidence(
+        observation,
+        platform_name="Windows",
+        inspector=SignedInspector(),
+    )
+    request = SecurityRequest(
+        request_id="REQ-SIGNATURE-FLOW",
+        identity={"type": "local_user", "name": "operator"},
+        subject={"type": "process", "name": "signed-tool.exe"},
+        action={"type": "inspect"},
+        resource={"type": "file", "path": str(executable)},
+    )
+    request.add_evidence(signature_result.evidence)
+    entity = TrustEntity("process:5353", EntityType.PROCESS)
+
+    result = evaluate_runtime_request(
+        request=request,
+        entity=entity,
+        policies=[
+            {
+                "id": "P-SIGNATURE-OBSERVED",
+                "name": "Signature observation is available",
+                "evidence": {"windows_executable_signature": {"verified": False}},
+                "effect": "permit",
+            }
+        ],
+    )
+
+    assert result.risk.evidence_ids == (signature_result.evidence.evidence_id,)
+    assert result.policy_results[0].matched is True
+    assert result.decision is not None
+    assert result.audit["evidence_ids"] == (signature_result.evidence.evidence_id,)
+
+
+def test_non_affirmative_signature_evidence_reaches_risk_without_collector_decision(tmp_path):
+    missing = tmp_path / "missing-signed-tool.exe"
+    observation = WindowsObservation(
+        process_id=5454,
+        process_name="missing-signed-tool.exe",
+        executable_path=str(missing),
+        parent_process_id=1000,
+        user_identity="S-1-5-21-operator",
+        observed_at=datetime(2026, 9, 13, 14, 0, tzinfo=timezone.utc),
+    )
+    signature_result = collect_signature_evidence(observation, platform_name="Windows")
+    request = SecurityRequest(
+        request_id="REQ-SIGNATURE-MISSING",
+        identity={"type": "local_user", "name": "operator"},
+        subject={"type": "process", "name": "missing-signed-tool.exe"},
+        action={"type": "inspect"},
+        resource={"type": "file", "path": str(missing)},
+    )
+    request.add_evidence(signature_result.evidence)
+    entity = TrustEntity("process:5454", EntityType.PROCESS)
+
+    result = evaluate_runtime_request(request=request, entity=entity, policies=[])
+
+    assert signature_result.status.name == "MISSING"
+    assert result.risk.evidence_ids == (signature_result.evidence.evidence_id,)
+    assert not hasattr(signature_result, "decision")
     assert entity.state is TrustState.QUARANTINED
